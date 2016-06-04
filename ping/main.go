@@ -80,6 +80,10 @@ func bytesToTime(b []byte) time.Time {
 	return time.Unix(nsec/1000000000, nsec%1000000000)
 }
 
+// Loops until the user manually terminates it.
+// The main loop processes received packets and timing as events(aka goroutines).
+// It sends an ICMP packet to host once per second(MaxRTT), and calculates the
+// RTT when the packet received.
 func (p *Pinger) RunLoop() error {
 	var conn *icmp.PacketConn
 	var err error
@@ -89,7 +93,7 @@ func (p *Pinger) RunLoop() error {
 	}
 	defer conn.Close()
 
-	// register a channel, that will signal once packet received.
+	// register a channel, that signals once packet received.
 	// the "receiver" runs in another loop.
 	recv := make(chan *packet, 1)
 	go p.recvICMP(conn, recv)
@@ -163,7 +167,7 @@ func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet) (err error
 		// read buffer
 		b := make([]byte, 512)
 
-		// wait for 100 milliseconds if no packets are come
+		// wait for 3 seconds if no packets are come
 		conn.SetReadDeadline(time.Now().Add(time.Second * 3))
 		if _, remote, err = conn.ReadFrom(b); err != nil {
 			return
@@ -203,20 +207,19 @@ func (p *Pinger) procICMP(pac *packet) (err error) {
 }
 
 func main() {
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage:\n  %s hostname\n", os.Args[0])
-		flag.PrintDefaults()
-	}
+
+	hostname := flag.String("hostname", "",
+		"Example: ./ping -hostname=www.example.com")
+
 	flag.Parse()
 
 	// hostname must be provided
-	hostname := flag.Arg(0)
-	if len(hostname) == 0 {
+	if len(*hostname) == 0 {
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	pinger, err := NewPinger(hostname)
+	pinger, err := NewPinger(*hostname)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
