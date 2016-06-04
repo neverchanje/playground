@@ -1,0 +1,5 @@
+package udpchat
+
+import (
+	"testing"
+)

@@ -1,4 +1,4 @@
-package client
+package udpchat
 
 import (
 	"bufio"
@@ -6,11 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
-	"runtime"
 	"strings"
-	"time"
-
-	uc "github.com/neverchanje/unplayground/udpchat"
 )
 
 type Client struct {
@@ -36,8 +32,8 @@ func (c *Client) Close() {
 	c.conn.Close()
 }
 
-func (c *Client) send(msg []byte, t uc.RequestType) {
-	if t == uc.ReqSendChatMsg && len(msg) == 0 {
+func (c *Client) send(msg []byte, t RequestType) {
+	if t == ReqSendChatMsg && len(msg) == 0 {
 		log.Println("Sending empty messages is not allowed.")
 		return
 	}
@@ -76,12 +72,12 @@ func (c *Client) checkInput() {
 		} else if strings.Compare(msg, "help") == 0 {
 			continue
 		} else if strings.Compare(msg, "history") == 0 {
-			c.send(nil, uc.ReqGetHistory)
+			c.send(nil, ReqGetHistory)
 			continue
 		} else if strings.HasPrefix(msg, "send:") {
 			msg = strings.TrimLeft(msg, "send:")
 			msg = strings.TrimSpace(msg)
-			c.send([]byte(msg), uc.ReqSendChatMsg)
+			c.send([]byte(msg), ReqSendChatMsg)
 			continue
 		}
 
@@ -107,7 +103,7 @@ loop:
 // NOTE Close the opened client when no longer used.
 func NewClient(username string) (client *Client, err error) {
 	client = new(Client)
-	err = client.connect(uc.ServiceHost, uc.ServicePort)
+	err = client.connect(ServiceHost, ServicePort)
 	if err == nil {
 		client.input = bufio.NewReader(os.Stdin)
 		client.quitListener = make(chan bool)

@@ -1,5 +1,12 @@
 package main
 
+import (
+	"bufio"
+	"fmt"
+	"runtime"
+	"time"
+)
+
 func main() {
 
 	fmt.Println("udpchat (" + time.Now().Format(time.UnixDate) + ")")

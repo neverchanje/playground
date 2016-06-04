@@ -1,14 +1,10 @@
-package server
+package udpchat
 
 import (
-	"fmt"
 	"log"
 	"net"
-	"os"
 	"strings"
 	"time"
-
-	"github.com/neverchanje/unplayground/udpchat"
 )
 
 // One goroutine for each connection.
@@ -60,10 +56,10 @@ func (c *Conn) handleClient() {
 			break
 		}
 
-		switch udpchat.RequestType(c.recv[0]) {
-		case udpchat.ReqSendChatMsg:
+		switch RequestType(c.recv[0]) {
+		case ReqSendChatMsg:
 			err = c.handleSndMsg(c.recv[1:n])
-		case udpchat.ReqGetHistory:
+		case ReqGetHistory:
 			err = c.handleHisReq()
 		}
 
@@ -123,6 +119,6 @@ func (h *Hub) Close() {
 
 func (h *Hub) RunLoop() {
 	for {
-		h.listen(udpchat.ServiceHost, udpchat.ServicePort)
+		h.listen(ServiceHost, ServicePort)
 	}
 }
