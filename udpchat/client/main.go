@@ -3,8 +3,11 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"runtime"
 	"time"
+
+	"github.com/neverchanje/unplayground/udpchat"
 )
 
 func main() {
@@ -15,7 +18,7 @@ func main() {
 	fmt.Print("\nPlease enter your username: ")
 	username, _, _ := bufio.NewReader(os.Stdin).ReadLine()
 
-	client, err := NewClient(string(username))
+	client, err := udpchat.NewClient(string(username))
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)

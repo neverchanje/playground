@@ -1,9 +1,11 @@
 package udpchat
 
 import (
+	"errors"
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,104 +23,103 @@ import (
 // TODO limit the allowed number of bytes to send.
 //
 
-type Conn struct {
-	udpconn *net.UDPConn
-	recv    []byte
-	hub     *Hub
-}
-
 type Hub struct {
-	conns   map[*Conn]bool
+	// The records in history have variable length, each of them
+	// has the format of:
+	//
 	history []string
+	mu      sync.Mutex
+	conn    *net.UDPConn
 }
 
-func NewConn(c *net.UDPConn) *Conn {
-	conn := new(Conn)
-	conn.recv = make([]byte, 512)
-	conn.udpconn = c
-	return conn
+type RequestHandler struct {
+	recv []byte
+	ra   *net.UDPAddr
+	hub  *Hub
 }
 
-// abandon this connection, it doesn't affect
-// other clients.
-func (h *Hub) abandon(c *Conn) {
-	c.Close()
-	delete(c.hub.conns, c)
+func NewRequestHandler(ra *net.UDPAddr, hub *Hub) *RequestHandler {
+	handler := new(RequestHandler)
+	handler.recv = make([]byte, 512)
+	handler.ra = ra
+	handler.hub = hub
+	return handler
 }
 
 // Serve for the requests from the client.
-func (c *Conn) handleClient() {
-	for {
-		n, err := c.udpconn.Read(c.recv)
-		if err != nil {
-			log.Println(err)
-			c.hub.abandon(c)
-			break
-		}
+func (h *RequestHandler) Handle() {
+	var err error
 
-		switch RequestType(c.recv[0]) {
-		case ReqSendChatMsg:
-			err = c.handleSndMsg(c.recv[1:n])
-		case ReqGetHistory:
-			err = c.handleHisReq()
-		}
+	reqType := RequestType(h.recv[0])
 
-		if err != nil {
-			log.Println(err)
-			c.hub.abandon(c)
-			break
-		}
+	switch reqType {
+	case ReqSendChatMsg:
+		err = h.handleSndMsg(h.recv[1:])
+	case ReqGetHistory:
+		err = h.handleHisReq()
+	}
+
+	if err != nil {
+		log.Println("Server " + err.Error())
+		return
 	}
 }
 
-func (c *Conn) handleSndMsg(msg []byte) error {
+func (h *RequestHandler) handleSndMsg(msg []byte) error {
+	if len(msg) == 0 {
+		return errors.New("Empty Message from " + h.ra.String())
+	}
+
 	record := string(msg)
-	record = time.Now().Format(time.UnixDate) + record
-	c.hub.history = append(c.hub.history, record)
+	record = time.Now().Format(time.UnixDate) + ": " + record
+
+	h.hub.history = append(h.hub.history, record)
 	return nil
 }
 
-func (c *Conn) handleHisReq() error {
-	logs := strings.Join(c.hub.history, "\n")
-	_, err := c.udpconn.Write([]byte(logs))
+func (h *RequestHandler) handleHisReq() error {
+	logs := strings.Join(h.hub.history, "; ")
+	if len(logs) == 0 {
+		logs = "No history now."
+	}
 
+	log.Println("Sending: [" + logs + "] to " + h.ra.String())
+	_, err := h.hub.conn.WriteToUDP([]byte(logs), h.ra)
 	return err
 }
 
-func (c *Conn) Close() {
-	c.udpconn.Close()
-}
-
-func (h *Hub) listen(host string, port int) error {
-	udpaddr := &net.UDPAddr{IP: net.ParseIP(host), Port: port}
-	c, err := net.ListenUDP("udp", udpaddr)
-	if err != nil {
-		return err
+func (h *Hub) listen() {
+	recv := make([]byte, 512)
+	for {
+		n, ra, err := h.conn.ReadFromUDP(recv)
+		if err != nil {
+			log.Println("Server " + err.Error())
+			continue
+		}
+		handler := NewRequestHandler(ra, h)
+		copy(handler.recv, recv[:n])
+		go handler.Handle()
 	}
-
-	conn := NewConn(c)
-	h.conns[conn] = true
-	// per goroutine per connection
-	go conn.handleClient()
-	return nil
 }
 
 func NewHub() (*Hub, error) {
 	hub := new(Hub)
-	hub.conns = make(map[*Conn]bool)
-	hub.history = make([]string, 5)
-	return hub, nil
+	err := hub.startServer(ServiceHost, ServicePort)
+	return hub, err
 }
 
-// Close all opening connection.
-func (h *Hub) Close() {
-	for c, _ := range h.conns {
-		h.abandon(c)
+func (h *Hub) startServer(host string, port int) error {
+	var err error
+	udpaddr := &net.UDPAddr{IP: net.ParseIP(host), Port: port}
+	h.conn, err = net.ListenUDP("udp", udpaddr)
+	if err != nil {
+		return err
 	}
+	log.Println("Server starts.")
+	return nil
 }
 
 func (h *Hub) RunLoop() {
-	for {
-		h.listen(ServiceHost, ServicePort)
-	}
+	h.listen()
+	defer h.conn.Close()
 }

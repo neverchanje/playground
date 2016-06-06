@@ -2,6 +2,7 @@ package udpchat
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -19,12 +20,15 @@ type Client struct {
 
 	// indicates iff the user types "quit".
 	quitListener chan bool
+
+	recv []byte
 }
 
 // Establishes an udp connection to server.
 func (c *Client) connect(host string, port int) (err error) {
 	c.remote = &net.UDPAddr{IP: net.ParseIP(host), Port: port}
 	c.conn, err = net.DialUDP("udp", nil, c.remote)
+	println(c.remote.String())
 	return err
 }
 
@@ -32,10 +36,9 @@ func (c *Client) Close() {
 	c.conn.Close()
 }
 
-func (c *Client) send(msg []byte, t RequestType) {
+func (c *Client) Send(msg []byte, t RequestType) error {
 	if t == ReqSendChatMsg && len(msg) == 0 {
-		log.Println("Sending empty messages is not allowed.")
-		return
+		return errors.New("Sending empty messages is not allowed.")
 	}
 
 	// Fixed-length header reserved for providing information of client
@@ -45,10 +48,22 @@ func (c *Client) send(msg []byte, t RequestType) {
 
 	msg = append(header, msg...)
 
-	n, err := c.conn.Write(msg)
-	if err != nil || n != len(msg) {
-		log.Println(err)
+	_, err := c.conn.Write(msg)
+	return err
+}
+
+func (c *Client) handleHisResponse() error {
+	n, err := c.conn.Read(c.recv)
+	if err != nil {
+		return err
 	}
+	if n != 0 {
+		histories := strings.Split(string(c.recv), "; ")
+		for i := range histories {
+			println(histories[i])
+		}
+	}
+	return nil
 }
 
 // Asynchronously checks the user input.
@@ -61,7 +76,7 @@ func (c *Client) checkInput() {
 
 		// TODO input error?
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal("Input Error: " + err.Error())
 		}
 
 		msg := strings.TrimSpace(string(line))
@@ -72,12 +87,24 @@ func (c *Client) checkInput() {
 		} else if strings.Compare(msg, "help") == 0 {
 			continue
 		} else if strings.Compare(msg, "history") == 0 {
-			c.send(nil, ReqGetHistory)
+			err := c.Send(nil, ReqGetHistory)
+			if err == nil {
+				err = c.handleHisResponse()
+			}
+
+			if err != nil {
+				log.Println("Client " + err.Error())
+			}
 			continue
 		} else if strings.HasPrefix(msg, "send:") {
 			msg = strings.TrimLeft(msg, "send:")
 			msg = strings.TrimSpace(msg)
-			c.send([]byte(msg), ReqSendChatMsg)
+
+			if len(msg) == 0 {
+				println("Input message should not be emtpy.")
+			} else {
+				c.Send([]byte(msg), ReqSendChatMsg)
+			}
 			continue
 		}
 
@@ -108,6 +135,7 @@ func NewClient(username string) (client *Client, err error) {
 		client.input = bufio.NewReader(os.Stdin)
 		client.quitListener = make(chan bool)
 		client.username = username
+		client.recv = make([]byte, 4096)
 	}
 	return client, err
 }
