@@ -20,7 +20,6 @@ import (
 // TODO the client should store a local cache of the chat history, so that it
 // do not have to make requests every time.
 // TODO connect in TCP but chat in UDP.
-// TODO limit the allowed number of bytes to send.
 //
 
 type Hub struct {
@@ -98,6 +97,7 @@ func (h *Hub) listen() {
 		}
 		handler := NewRequestHandler(ra, h)
 		copy(handler.recv, recv[:n])
+		// handle the request in background.
 		go handler.Handle()
 	}
 }

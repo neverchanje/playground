@@ -28,7 +28,6 @@ type Client struct {
 func (c *Client) connect(host string, port int) (err error) {
 	c.remote = &net.UDPAddr{IP: net.ParseIP(host), Port: port}
 	c.conn, err = net.DialUDP("udp", nil, c.remote)
-	println(c.remote.String())
 	return err
 }
 
@@ -102,6 +101,8 @@ func (c *Client) checkInput() {
 
 			if len(msg) == 0 {
 				println("Input message should not be emtpy.")
+			} else if len(msg) > 250 {
+				println("Length of message should not larger than 250")
 			} else {
 				c.Send([]byte(msg), ReqSendChatMsg)
 			}
@@ -120,6 +121,7 @@ func (c *Client) RunLoop() {
 loop:
 	for {
 		select {
+		// 这么写没有为什么，就是为了装逼
 		case <-c.quitListener:
 			break loop
 		}
