@@ -2,14 +2,21 @@ package udpchat
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
+// The client serves as a application that executes commands in
+// sequential order.
 type Client struct {
 	remote   *net.UDPAddr
 	conn     *net.UDPConn
@@ -22,6 +29,8 @@ type Client struct {
 	quitListener chan bool
 
 	recv []byte
+
+	fsender *fileSender
 }
 
 // Establishes an udp connection to server.
@@ -36,7 +45,7 @@ func (c *Client) Close() {
 }
 
 func (c *Client) Send(msg []byte, t RequestType) error {
-	if t == ReqSendChatMsg && len(msg) == 0 {
+	if t == kReqSendChatMsg && len(msg) == 0 {
 		return errors.New("Sending empty messages is not allowed.")
 	}
 
@@ -65,6 +74,150 @@ func (c *Client) handleHisResponse() error {
 	return nil
 }
 
+func (c *Client) SendHisReq() {
+	err := c.Send(nil, kReqGetHistory)
+	if err == nil {
+		err = c.handleHisResponse()
+	}
+	if err != nil {
+		log.Println("[Error] Sending history request: " + err.Error())
+	}
+}
+
+func (c *Client) SendChatMsg(msg string) {
+	if len(msg) == 0 {
+		println("Input message should not be empty.")
+	} else if len(msg) > 250 {
+		println("Length of message should not be larger than 250")
+	} else {
+		err := c.Send([]byte(msg), kReqSendChatMsg)
+		if err != nil {
+			log.Println("[Error] Sending chat message: " + err.Error())
+		}
+	}
+}
+
+type fileSender struct {
+	fname  string
+	client *Client
+
+	// segments that's not accepted
+	// TODO use offset as value
+	unaccepted map[uint32]([]byte)
+
+	packet_id []byte
+}
+
+func (c *Client) newFileSender(fname string) *fileSender {
+	f := new(fileSender)
+	f.unaccepted = make(map[uint32]([]byte))
+	f.client = c
+	f.fname = fname
+
+	// TODO use better packet_id, like hash64(ra.String() + fname)
+	f.packet_id = make([]byte, 8)
+	hs := fnv.New64()
+	hs.Write([]byte(f.fname))
+	binary.LittleEndian.PutUint64(f.packet_id, hs.Sum64())
+
+	log.Println("Generating packet_id: ", hs.Sum64())
+
+	return f
+}
+
+func (c *Client) SendFile(file string) {
+	if len(file) == 0 {
+		println("Input file name should not be empty.")
+	} else {
+		c.fsender = c.newFileSender(file)
+
+		send_file_packet := make([]byte, len(file)+8)
+		copy(send_file_packet, c.fsender.packet_id)
+		copy(send_file_packet[8:], []byte(file))
+		err := c.Send(send_file_packet, kReqSendFile)
+
+		if err != nil {
+			log.Println("[Error] Sending file: " + err.Error())
+			return
+		}
+
+		_, err = c.conn.Read(c.recv)
+		if err != nil {
+			log.Println("[Error] Sending file: " + err.Error())
+			return
+		}
+
+		switch ResponseType(c.recv[0]) {
+		case kRespSendFileOK:
+			println("Start file transferring")
+			c.fsender.sendFileImpl(file)
+			c.fsender = nil
+		case kRespSendFileFailed:
+			log.Println("[Error] Sending file is not permitted")
+			return
+		}
+	}
+}
+
+func (fs *fileSender) sendFileImpl(fname string) {
+	file, err := os.Open(fname)
+	if err != nil {
+		log.Println("[Error] " + err.Error())
+		return
+	}
+
+	reader := bufio.NewReader(file)
+	var sid uint32 = 0
+	hitsEOF := false
+	content := make([]byte, 512)
+
+	for {
+		if hitsEOF {
+			//TODO resend segment
+			break
+		} else {
+			n, err := reader.Read(content)
+			if err == io.EOF {
+				hitsEOF = true
+			} else if err != nil {
+				log.Println("[Error] File reading " + err.Error())
+				return
+			}
+			content = content[:n]
+		}
+
+		err = fs.sendSegment(content, sid)
+		if err != nil {
+			log.Println("[Error] Segment sending " + err.Error())
+		}
+
+		sid += 1
+	}
+}
+
+func (fs *fileSender) sendSegment(content []byte, seg_id uint32) error {
+	packet := new(bytes.Buffer)
+
+	packet.WriteByte(byte(kReqSendSeg))
+
+	// PACKET_ID
+	packet.Write(fs.packet_id)
+
+	// SEG_ID
+	seg_id_buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(seg_id_buf, seg_id)
+	packet.Write(seg_id_buf)
+
+	// SEG_CONTENT
+	packet.Write(content)
+	fs.unaccepted[seg_id] = content
+
+	_, err := fs.client.conn.Write(packet.Bytes())
+
+	log.Println("Writing segment "+strconv.FormatUint(uint64(seg_id), 10)+" in length ", packet.Len()-13)
+	return err
+}
+
 // Asynchronously checks the user input.
 func (c *Client) checkInput() {
 	for {
@@ -80,32 +233,26 @@ func (c *Client) checkInput() {
 
 		msg := strings.TrimSpace(string(line))
 
-		if strings.Compare(msg, "quit") == 0 {
+		// "quit" and "history" are case-insensitive, which means
+		// commands like "QuIT" and "HiSTOry" are legal.
+		if strings.EqualFold(msg, "quit") {
 			c.quitListener <- true
 			break
-		} else if strings.Compare(msg, "help") == 0 {
+		} else if strings.EqualFold(msg, "help") {
+			PrintHelpInfo()
 			continue
-		} else if strings.Compare(msg, "history") == 0 {
-			err := c.Send(nil, ReqGetHistory)
-			if err == nil {
-				err = c.handleHisResponse()
-			}
-
-			if err != nil {
-				log.Println("Client " + err.Error())
-			}
+		} else if strings.EqualFold(msg, "history") {
+			c.SendHisReq()
 			continue
 		} else if strings.HasPrefix(msg, "send:") {
 			msg = strings.TrimLeft(msg, "send:")
 			msg = strings.TrimSpace(msg)
-
-			if len(msg) == 0 {
-				println("Input message should not be emtpy.")
-			} else if len(msg) > 250 {
-				println("Length of message should not larger than 250")
-			} else {
-				c.Send([]byte(msg), ReqSendChatMsg)
-			}
+			c.SendChatMsg(msg)
+			continue
+		} else if strings.HasPrefix(msg, "sendfile:") {
+			file := strings.TrimLeft(msg, "sendfile:")
+			file = strings.TrimSpace(file)
+			c.SendFile(file)
 			continue
 		}
 
@@ -138,6 +285,7 @@ func NewClient(username string) (client *Client, err error) {
 		client.quitListener = make(chan bool)
 		client.username = username
 		client.recv = make([]byte, 4096)
+		client.fsender = nil
 	}
 	return client, err
 }

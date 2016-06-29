@@ -4,5 +4,6 @@ import (
 	"testing"
 )
 
-func TestHistory(t *testing.T) {
+func TestFuck(t *testing.T) {
+
 }

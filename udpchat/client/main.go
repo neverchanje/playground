@@ -14,6 +14,7 @@ func main() {
 
 	fmt.Println("udpchat (" + time.Now().Format(time.UnixDate) + ")")
 	fmt.Println("[" + runtime.GOOS + " " + runtime.GOARCH + "]")
+	fmt.Println("Type \"help\" for more information.")
 
 	fmt.Print("\nPlease enter your username: ")
 	username, _, _ := bufio.NewReader(os.Stdin).ReadLine()
